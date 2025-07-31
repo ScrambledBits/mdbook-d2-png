@@ -26,7 +26,7 @@ pub struct D2;
 
 impl Preprocessor for D2 {
     fn name(&self) -> &'static str {
-        "d2"
+        "d2-png"
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {

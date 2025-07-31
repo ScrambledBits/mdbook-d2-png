@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use mdbook::MDBook;
-use mdbook_d2::D2;
+use mdbook_d2_png::D2;
 use tempfile::TempDir;
 
 /// Returns the path to the test library directory

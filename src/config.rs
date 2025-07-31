@@ -14,7 +14,7 @@ mod default {
     }
 
     pub const fn inline() -> bool {
-        true
+        false
     }
 }
 

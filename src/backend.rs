@@ -62,7 +62,7 @@ impl<'a> RenderContext<'a> {
 /// Returns a relative path for the diagram file
 fn filename(ctx: &RenderContext) -> String {
     format!(
-        "{}{}.svg",
+        "{}{}.png",
         ctx.section.cloned().unwrap_or_default(),
         ctx.diagram_index
     )
@@ -136,31 +136,53 @@ impl Backend {
         content: &str,
     ) -> anyhow::Result<Vec<Event<'static>>> {
         if self.inline {
-            self.render_inline(ctx, content)
+            self.render_inline_png(ctx, content)
         } else {
-            self.render_embedded(ctx, content)
+            self.render_embedded_png(ctx, content)
         }
     }
 
-    fn render_inline(
+    fn render_inline_png(
         &self,
         ctx: &RenderContext,
         content: &str,
     ) -> anyhow::Result<Vec<Event<'static>>> {
-        let args = self.basic_args();
-        let diagram = self.run_process(ctx, content, args)?;
-        Ok(vec![Event::Html(
-            format!("\n<pre>{diagram}</pre>\n").into(),
-        )])
-    }
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        use std::fs;
 
-    fn render_embedded(
-        &self,
-        ctx: &RenderContext,
-        content: &str,
-    ) -> anyhow::Result<Vec<Event<'static>>> {
         fs::create_dir_all(Path::new(&self.source_dir).join(self.output_dir())).unwrap();
         let mut args = self.basic_args();
+        args.push(OsStr::new("--output-format"));
+        args.push(OsStr::new("png"));
+        let filepath = self.filepath(ctx);
+        args.push(filepath.as_os_str());
+
+        self.run_process(ctx, content, args)?;
+        let bytes = fs::read(&filepath)?;
+        let data_uri = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
+        Ok(vec![Event::Start(Tag::Paragraph),
+            Event::Start(Tag::Image {
+                link_type: LinkType::Inline,
+                dest_url: data_uri.into(),
+                title: CowStr::Borrowed("") ,
+                id: CowStr::Borrowed("") ,
+            }),
+            Event::End(TagEnd::Image),
+            Event::End(TagEnd::Paragraph),
+        ])
+    }
+
+    fn render_embedded_png(
+        &self,
+        ctx: &RenderContext,
+        content: &str,
+    ) -> anyhow::Result<Vec<Event<'static>>> {
+        use std::fs;
+        fs::create_dir_all(Path::new(&self.source_dir).join(self.output_dir())).unwrap();
+        let mut args = self.basic_args();
+        args.push(OsStr::new("--output-format"));
+        args.push(OsStr::new("png"));
         let filepath = self.filepath(ctx);
         args.push(filepath.as_os_str());
 
@@ -180,8 +202,8 @@ impl Backend {
                     .to_string()
                     .replace('\\', "/")
                     .into(),
-                title: CowStr::Borrowed(""),
-                id: CowStr::Borrowed(""),
+                title: CowStr::Borrowed("") ,
+                id: CowStr::Borrowed("") ,
             }),
             Event::End(TagEnd::Image),
             Event::End(TagEnd::Paragraph),

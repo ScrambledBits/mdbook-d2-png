@@ -1,98 +1,41 @@
-# D2 preprocessor for mdbook
+# mdbook-d2-png
 
-[![codecov](https://codecov.io/gh/danieleades/mdbook-d2/branch/main/graph/badge.svg?token=BIHcAnynaN)](https://codecov.io/gh/danieleades/mdbook-d2)
-[![Continuous integration](https://github.com/danieleades/mdbook-d2/actions/workflows/CI.yml/badge.svg)](https://github.com/danieleades/mdbook-d2/actions/workflows/CI.yml)
+A PNG-output mdBook preprocessor for D2 diagrams. Requires the `d2` CLI on PATH.
 
-A preprocessor for [mdbook](https://github.com/rust-lang/mdBook) to convert
-`d2` codeblocks into SVG images using
-[D2](https://github.com/terrastruct/d2).
-
-## Installation
-
-Install with cargo:
+## Install
 
 ```sh
-cargo install mdbook-d2 --locked
+cargo install --path . --locked
 ```
 
-Or to install from git:
+## Configure in your book
 
-```sh
-cargo install --git https://github.com/danieleades/mdbook-d2 --locked
-```
-
-## Requirements
-
-This preprocessor assumes that `D2` is installed locally and on the path. D2 installation instructions can be found [here](https://github.com/terrastruct/d2#install).
-
-Check that the local installation is working correctly using
-
-```sh
-d2 --version
-```
-
-## Usage
-
-### Configuration
-
-Add this to your `book.toml`:
+Add this to `book.toml`:
 
 ```toml
-[preprocessor.d2]
-
-# path to d2 binary.
-# optional. default is "d2" (ie. on the path).
+[preprocessor.d2-png]
+# path to d2 binary (optional, default: "d2")
 path = "d2"
 
-# layout engine for diagrams. See https://github.com/terrastruct/d2#plugins.
-# optional. default is "dagre".
+# layout engine (optional, default: "dagre")
 layout = "dagre"
 
-# whether to use inline svg when rendering.
-# if 'false', separate files will be generated in src/<output-dir> and referenced.
-# optional. default is 'true'
-inline = true
+# PNG behavior (default false): when true, diagrams are inlined via base64 data URIs
+inline = false
 
-# output directory relative to `src/` for generated diagrams.
-# This is ignored if 'inline' is 'true'.
-# optional. default is "d2".
+# output directory relative to `src/` for generated diagrams (used when inline = false)
 output-dir = "d2"
 ```
 
-### Code Blocks
+## Use in Markdown
 
-Use in your 'book' by annotating D2 code blocks-
-
-````md
-
-## My Diagram
-
+```md
 ```d2
-# Actors
-hans: Hans Niemann
-
-defendants: {
-  mc: Magnus Carlsen
-  playmagnus: Play Magnus Group
-  chesscom: Chess.com
-  naka: Hikaru Nakamura
-
-  mc -> playmagnus: Owns majority
-  playmagnus <-> chesscom: Merger talks
-  chesscom -> naka: Sponsoring
-}
-
-# Accusations
-hans -> defendants: 'sueing for $100M'
-
-# Offense
-defendants.naka -> hans: Accused of cheating on his stream
-defendants.mc -> hans: Lost then withdrew with accusations
-defendants.chesscom -> hans: 72 page report of cheating
+a: A
+b: B
+a -> b: hello
 ```
-````
-
-The code block will be replaced with the D2 diagram in the rendered document.
+```
 
 ## Thanks
 
