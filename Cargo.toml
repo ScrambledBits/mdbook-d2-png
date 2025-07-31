@@ -1,7 +1,7 @@
 [package]
 name = "mdbook-d2-png"
 description = "PNG-output mdBook preprocessor for D2 diagrams"
-version = "0.3.6-png.0"
+version = "0.3.7-png.2"
 authors = ["Emilio Castro <emilio@emiliocastro.com.mx>"]
 edition = "2021"
 license = "MIT"

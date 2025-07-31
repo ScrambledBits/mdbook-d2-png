@@ -1,6 +1,6 @@
 # mdbook-d2-png
 
-A PNG-output mdBook preprocessor for D2 diagrams. Requires the `d2` CLI on PATH.
+A PNG-output mdBook preprocessor for D2 diagrams. Requires the `d2` CLI on PATH (compatible con d2 >=0.7.0).
 
 ## Install
 
@@ -10,24 +10,24 @@ cargo install --path . --locked
 
 ## Configure in your book
 
-Add this to `book.toml`:
+Agrega esto a tu `book.toml`:
 
 ```toml
 [preprocessor.d2-png]
-# path to d2 binary (optional, default: "d2")
+# path to d2 binary (opcional, default: "d2")
 path = "d2"
 
-# layout engine (optional, default: "dagre")
+# layout engine (opcional, default: "dagre")
 layout = "dagre"
 
-# PNG behavior (default false): when true, diagrams are inlined via base64 data URIs
+# PNG behavior (default false): cuando es true, los diagramas se incrustan como data URI base64
 inline = false
 
-# output directory relative to `src/` for generated diagrams (used when inline = false)
+# output directory relativo a `src/` para los diagramas generados (usado cuando inline = false)
 output-dir = "d2"
 ```
 
-## Use in Markdown
+## Uso en Markdown
 
 ```md
 ```d2
@@ -36,6 +36,12 @@ b: B
 a -> b: hello
 ```
 ```
+
+## Notas de compatibilidad
+
+- No se usa el flag `--output-format`. El preprocesador solo pasa el archivo de entrada `.d2` y el archivo de salida `.png` al comando `d2`.
+- Compatible con d2 >=0.7.0.
+- Si tienes una versión anterior de d2, actualízala para soporte PNG directo.
 
 ## Thanks
 

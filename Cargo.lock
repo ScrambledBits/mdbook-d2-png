@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "mdbook-d2-png"
-version = "0.3.6-png.0"
+version = "0.3.7-png.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

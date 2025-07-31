@@ -1,5 +1,4 @@
 use std::ffi::OsStr;
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -94,9 +93,9 @@ impl Backend {
     pub fn from_context(ctx: &PreprocessorContext) -> Self {
         let config: Config = ctx
             .config
-            .get_deserialized_opt("preprocessor.d2")
-            .expect("Unable to deserialize d2 preprocessor config")
-            .expect("d2 preprocessor config not found");
+            .get_deserialized_opt("preprocessor.d2-png")
+            .expect("Unable to deserialize d2-png preprocessor config")
+            .expect("d2-png preprocessor config not found");
         let source_dir = ctx.root.join(&ctx.config.book.src);
 
         Self::new(config, source_dir)
@@ -153,8 +152,6 @@ impl Backend {
 
         fs::create_dir_all(Path::new(&self.source_dir).join(self.output_dir())).unwrap();
         let mut args = self.basic_args();
-        args.push(OsStr::new("--output-format"));
-        args.push(OsStr::new("png"));
         let filepath = self.filepath(ctx);
         args.push(filepath.as_os_str());
 
@@ -181,8 +178,6 @@ impl Backend {
         use std::fs;
         fs::create_dir_all(Path::new(&self.source_dir).join(self.output_dir())).unwrap();
         let mut args = self.basic_args();
-        args.push(OsStr::new("--output-format"));
-        args.push(OsStr::new("png"));
         let filepath = self.filepath(ctx);
         args.push(filepath.as_os_str());
 
