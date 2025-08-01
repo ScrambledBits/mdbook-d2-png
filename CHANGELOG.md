@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [0.3.7-png.2] - 2025-07-30
+
+### Added
+- Detailed command line help and documentation for mdbook-d2-png preprocessor
+
+### Changed
+- Bump version from 0.3.6-png.0 to 0.3.7-png.2 for new release
+- Update documentation to reflect compatibility with d2 >=0.7.0 and configuration changes
+- Remove unnecessary '--output-format' flag and update preprocessor config key
+
+## [0.3.6-png.0] - 2025-07-30
+
+### Added
+- Fork from mdbook-d2 to create mdbook-d2-png
+- PNG output instead of SVG format
+- Base64 data URI support for inline PNG images
+- Better platform and browser compatibility
+
+### Changed
+- Output format from SVG to PNG (.png file extension)
+- Default inline behavior from true to false (separate files by default)
+- Preprocessor name from "d2" to "d2-png"
+- Package name, description, version, authors, and repository information
+- Add base64 dependency for PNG encoding
+- Update README.md to reflect PNG-specific usage
+- Update example book configuration
+- Update all tests to use new preprocessor name
+
+### Removed
+- SVG-specific inline rendering logic
+
+---
+
+## Original mdbook-d2 Changelog
+
 ## [0.3.6](https://github.com/danieleades/mdbook-d2/compare/v0.3.5...v0.3.6) - 2025-06-30
 
 ### Fixed
