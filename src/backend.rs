@@ -24,6 +24,10 @@ const PREPROCESSOR_CONFIG_KEY: &str = "preprocessor.d2-png";
 const D2_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Path-related configuration for the backend
+///
+/// This struct groups all path-related fields for better organization.
+/// Keeping paths separate from rendering config makes the purpose of each
+/// field clearer and makes it easier to extend path configuration in the future.
 #[derive(Debug, Clone)]
 struct PathConfig {
     /// Absolute path to the D2 binary
@@ -35,6 +39,10 @@ struct PathConfig {
 }
 
 /// Rendering configuration for D2 diagrams
+///
+/// This struct groups all rendering-related options for better organization.
+/// Keeping rendering config separate from paths makes the Backend structure
+/// more maintainable and makes it clearer which fields affect diagram rendering.
 #[derive(Debug, Clone)]
 struct RenderConfig {
     /// Layout engine to use for D2 diagrams
@@ -420,5 +428,165 @@ impl Backend {
                 indented_stderr
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mdbook::book::SectionNumber;
+    use std::path::Path;
+
+    /// Creates a minimal test Backend instance
+    fn create_test_backend() -> Backend {
+        Backend {
+            paths: PathConfig {
+                d2_binary: PathBuf::from("d2"),
+                output_dir: PathBuf::from("d2"),
+                source_dir: PathBuf::from("/test/src"),
+            },
+            render: RenderConfig {
+                layout: None,
+                inline: false,
+                fonts: None,
+                theme_id: None,
+                dark_theme_id: None,
+            },
+        }
+    }
+
+    /// Creates a test RenderContext with given chapter path
+    fn create_test_context<'a>(
+        path: &'a Path,
+        chapter: &'a str,
+        section: Option<&'a SectionNumber>,
+        index: usize,
+    ) -> RenderContext<'a> {
+        RenderContext::new(path, chapter, section, index)
+    }
+
+    #[test]
+    fn test_calculate_relative_path_root_level_chapter() {
+        // Root-level chapter: chapter.md in src/
+        let backend = create_test_backend();
+        let chapter_path = Path::new("chapter.md");
+        let section = SectionNumber(vec![1]);
+        let ctx = create_test_context(chapter_path, "Test Chapter", Some(&section), 1);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // Root-level: no "../" needed, just "d2/1.1.png"
+        assert_eq!(rel_path, PathBuf::from("d2/1.1.png"));
+    }
+
+    #[test]
+    fn test_calculate_relative_path_one_level_deep() {
+        // One level deep: intro/chapter.md
+        let backend = create_test_backend();
+        let chapter_path = Path::new("intro/chapter.md");
+        let section = SectionNumber(vec![1]);
+        let ctx = create_test_context(chapter_path, "Test Chapter", Some(&section), 1);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // One level: "../d2/1.1.png"
+        assert_eq!(rel_path, PathBuf::from("../d2/1.1.png"));
+    }
+
+    #[test]
+    fn test_calculate_relative_path_two_levels_deep() {
+        // Two levels deep: part1/chapter1/file.md
+        let backend = create_test_backend();
+        let chapter_path = Path::new("part1/chapter1/file.md");
+        let section = SectionNumber(vec![1, 1]);
+        let ctx = create_test_context(chapter_path, "Test Chapter", Some(&section), 1);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // Two levels: "../../d2/1.1.1.png"
+        assert_eq!(rel_path, PathBuf::from("../../d2/1.1.1.png"));
+    }
+
+    #[test]
+    fn test_calculate_relative_path_three_levels_deep() {
+        // Three levels deep: a/b/c/chapter.md
+        let backend = create_test_backend();
+        let chapter_path = Path::new("a/b/c/chapter.md");
+        let section = SectionNumber(vec![2, 3, 4]);
+        let ctx = create_test_context(chapter_path, "Deep Chapter", Some(&section), 2);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // Three levels: "../../../d2/2.3.4.2.png"
+        assert_eq!(rel_path, PathBuf::from("../../../d2/2.3.4.2.png"));
+    }
+
+    #[test]
+    fn test_calculate_relative_path_no_section_number() {
+        // Chapter without section number (unnumbered chapter)
+        let backend = create_test_backend();
+        let chapter_path = Path::new("appendix/info.md");
+        let ctx = create_test_context(chapter_path, "Appendix", None, 1);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // One level deep, no section: "../d2/1.png"
+        assert_eq!(rel_path, PathBuf::from("../d2/1.png"));
+    }
+
+    #[test]
+    fn test_calculate_relative_path_custom_output_dir() {
+        // Custom output directory
+        let mut backend = create_test_backend();
+        backend.paths.output_dir = PathBuf::from("diagrams");
+
+        let chapter_path = Path::new("intro/chapter.md");
+        let section = SectionNumber(vec![1]);
+        let ctx = create_test_context(chapter_path, "Test", Some(&section), 1);
+
+        let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+
+        // Should use custom output dir: "../diagrams/1.1.png"
+        assert_eq!(rel_path, PathBuf::from("../diagrams/1.1.png"));
+    }
+
+    #[test]
+    fn test_filename_generation() {
+        // Test filename generation for various section numbers
+        let section1 = SectionNumber(vec![1]);
+        let ctx1 = create_test_context(Path::new("test.md"), "Test", Some(&section1), 2);
+        assert_eq!(filename(&ctx1), "1.2.png");
+
+        let section2 = SectionNumber(vec![1, 2, 3]);
+        let ctx2 = create_test_context(Path::new("test.md"), "Test", Some(&section2), 1);
+        assert_eq!(filename(&ctx2), "1.2.3.1.png");
+
+        // No section number
+        let ctx3 = create_test_context(Path::new("test.md"), "Test", None, 5);
+        assert_eq!(filename(&ctx3), "5.png");
+    }
+
+    #[test]
+    fn test_relative_file_path() {
+        let backend = create_test_backend();
+        let section = SectionNumber(vec![1, 2]);
+        let ctx = create_test_context(Path::new("test.md"), "Test", Some(&section), 3);
+
+        let rel_path = backend.relative_file_path(&ctx);
+
+        // Should be output_dir + filename
+        assert_eq!(rel_path, PathBuf::from("d2/1.2.3.png"));
+    }
+
+    #[test]
+    fn test_filepath_construction() {
+        let backend = create_test_backend();
+        let section = SectionNumber(vec![2]);
+        let ctx = create_test_context(Path::new("test.md"), "Test", Some(&section), 1);
+
+        let filepath = backend.filepath(&ctx);
+
+        // Should be source_dir + output_dir + filename
+        assert_eq!(filepath, PathBuf::from("/test/src/d2/2.1.png"));
     }
 }

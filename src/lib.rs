@@ -65,6 +65,17 @@ impl Preprocessor for D2 {
 ///
 /// Manages state while processing a stream of markdown events, detecting D2 code blocks,
 /// accumulating their content, and rendering them to PNG images.
+///
+/// # Design Rationale
+///
+/// This processor is implemented as a struct rather than inline closure logic for several reasons:
+/// - **Testability**: Each method can be unit tested independently
+/// - **Clarity**: State transitions are explicit with named methods
+/// - **Maintainability**: Logic is easier to understand and modify
+/// - **Single Responsibility**: Each method has one clear purpose
+///
+/// While a closure with local variables would be more concise, this approach provides
+/// better long-term maintainability and makes the code more approachable for contributors.
 struct D2BlockProcessor<'a> {
     backend: &'a Backend,
     chapter: &'a Chapter,
@@ -103,10 +114,13 @@ impl<'a> D2BlockProcessor<'a> {
     }
 
     /// Checks if an event marks the start of a D2 code block
+    ///
+    /// Matches both `CowStr::Borrowed` and `CowStr::Boxed` variants to ensure
+    /// all D2 blocks are detected regardless of how the parser creates the string.
     fn is_d2_block_start(&self, event: &Event) -> bool {
         matches!(
             event,
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(CowStr::Borrowed(D2_CODE_BLOCK_LANG))))
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) if lang.as_ref() == D2_CODE_BLOCK_LANG
         )
     }
 
