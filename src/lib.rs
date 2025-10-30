@@ -20,13 +20,19 @@ use backend::{Backend, RenderContext};
 
 mod config;
 
+/// The name of this preprocessor
+const PREPROCESSOR_NAME: &str = "d2-png";
+
+/// The code block language identifier for D2 diagrams
+const D2_CODE_BLOCK_LANG: &str = "d2";
+
 /// [D2] diagram generator [`Preprocessor`] for [`MdBook`](https://rust-lang.github.io/mdBook/).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct D2;
 
 impl Preprocessor for D2 {
     fn name(&self) -> &'static str {
-        "d2-png"
+        PREPROCESSOR_NAME
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
@@ -44,7 +50,8 @@ impl Preprocessor for D2 {
                 let mut buf = String::with_capacity(chapter.content.len() + 128);
 
                 // convert it back to markdown and replace the original chapter's content
-                cmark(events, &mut buf).unwrap();
+                cmark(events, &mut buf)
+                    .expect("Failed to convert markdown events back to markdown");
                 chapter.content = buf;
             }
         });
@@ -69,7 +76,7 @@ fn process_events<'a>(
         match (&event, in_block) {
             // check if we are entering a d2 codeblock
             (
-                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(CowStr::Borrowed("d2")))),
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(CowStr::Borrowed(D2_CODE_BLOCK_LANG)))),
                 false,
             ) => {
                 in_block = true;
@@ -85,8 +92,10 @@ fn process_events<'a>(
             // check if we are exiting a d2 block
             (Event::End(TagEnd::CodeBlock), true) => {
                 in_block = false;
+                let source_path = chapter.source_path.as_ref()
+                    .expect("Chapter source path should always be set by mdBook");
                 let render_context = RenderContext::new(
-                    chapter.source_path.as_ref().unwrap(),
+                    source_path,
                     &chapter.name,
                     chapter.number.as_ref(),
                     diagram_index,

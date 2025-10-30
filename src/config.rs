@@ -36,9 +36,10 @@ pub struct Config {
 
     pub layout: Option<String>,
 
-    /// Whether or not to use inline SVG when building an HTML target
+    /// Whether to inline PNG images as base64 data URIs
     ///
-    /// Default is 'true'
+    /// When `true`, images are embedded directly in the HTML.
+    /// When `false` (default), images are saved as separate `.png` files.
     #[serde(default = "default::inline")]
     pub inline: bool,
 
@@ -96,7 +97,7 @@ output-dir = "d2-img"
     => Config {
         path: PathBuf::from("/custom/bin/d2"),
         layout: Some(String::from("elk")),
-        inline: true,
+        inline: false,
         output_dir: PathBuf::from("d2-img"),
         fonts: None,
         theme_id: None,
