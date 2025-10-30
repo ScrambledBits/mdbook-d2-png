@@ -2,16 +2,26 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use mdbook::book::SectionNumber;
 use mdbook::preprocess::PreprocessorContext;
 use pulldown_cmark::{CowStr, Event, LinkType, Tag, TagEnd};
+use wait_timeout::ChildExt;
 
 use crate::config::{Config, Fonts};
 
 /// Configuration key in book.toml for this preprocessor
 const PREPROCESSOR_CONFIG_KEY: &str = "preprocessor.d2-png";
+
+/// Default timeout for D2 process execution
+///
+/// This is a reasonable timeout for most diagrams. Very complex diagrams
+/// may take longer, but this helps prevent hanging on malformed input.
+/// If you experience timeout issues, consider simplifying the diagram
+/// or reporting a bug to the D2 project.
+const D2_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Path-related configuration for the backend
 #[derive(Debug, Clone)]
@@ -331,10 +341,19 @@ impl Backend {
 
     /// Runs the D2 process to generate a diagram
     ///
+    /// Executes the D2 binary with a timeout to prevent hanging on malformed input.
+    ///
     /// # Arguments
     /// * `ctx` - The render context for the diagram
     /// * `content` - The D2 diagram content
     /// * `args` - Additional arguments for the D2 process
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The D2 process fails to spawn
+    /// - Writing to stdin fails
+    /// - The process exceeds the timeout (30 seconds)
+    /// - The D2 compilation fails
     fn run_process(
         &self,
         ctx: &RenderContext,
@@ -347,29 +366,59 @@ impl Backend {
             .stderr(Stdio::piped())
             .args(args)
             .spawn()
-            .context("Failed to spawn D2 process")?;
+            .with_context(|| {
+                format!(
+                    "Failed to spawn D2 process. Is D2 installed and available at {:?}?",
+                    self.paths.d2_binary
+                )
+            })?;
 
-        // Write to stdin safely
+        // Write to stdin safely and close it
         {
-            let stdin = child.stdin.as_mut()
+            let stdin = child
+                .stdin
+                .as_mut()
                 .context("Failed to open stdin for D2 process")?;
-            stdin.write_all(content.as_bytes())
+            stdin
+                .write_all(content.as_bytes())
                 .context("Failed to write D2 diagram content to stdin")?;
         }
+        // stdin is automatically closed when it goes out of scope
 
-        let output = child.wait_with_output()
-            .context("Failed to wait for D2 process to complete")?;
+        // Wait for the process with a timeout
+        let status_code = match child.wait_timeout(D2_PROCESS_TIMEOUT)? {
+            Some(status) => status,
+            None => {
+                // Process exceeded timeout, kill it
+                child.kill().context("Failed to kill D2 process after timeout")?;
+                return Err(anyhow!(
+                    "D2 process timed out after {} seconds while processing diagram ({}, #{}). \
+                     The diagram may be too complex or D2 may be hanging. \
+                     Consider simplifying the diagram.",
+                    D2_PROCESS_TIMEOUT.as_secs(),
+                    ctx.chapter,
+                    ctx.diagram_index
+                ));
+            }
+        };
 
-        if output.status.success() {
+        // Collect output after process completes
+        let output = child
+            .wait_with_output()
+            .context("Failed to collect D2 process output")?;
+
+        if status_code.success() {
             Ok(())
         } else {
-            let src =
-                format!("\n{}", String::from_utf8_lossy(&output.stderr)).replace('\n', "\n  ");
-            let msg = format!(
-                "failed to compile D2 diagram ({}, #{}):{src}",
-                ctx.chapter, ctx.diagram_index
-            );
-            bail!(msg)
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let indented_stderr = format!("\n{stderr}").replace('\n', "\n  ");
+            bail!(
+                "Failed to compile D2 diagram ({}, #{}) - D2 exited with status {}:{}",
+                ctx.chapter,
+                ctx.diagram_index,
+                status_code,
+                indented_stderr
+            )
         }
     }
 }

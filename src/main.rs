@@ -67,10 +67,19 @@ fn main() {
 }
 
 fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<(), Error> {
-    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
+    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())
+        .map_err(|e| {
+            Error::msg(format!(
+                "Failed to parse mdBook input: {}. \
+                 This preprocessor should be called by mdBook, not directly.",
+                e
+            ))
+        })?;
 
-    let book_version = Version::parse(&ctx.mdbook_version)?;
-    let version_req = VersionReq::parse(mdbook::MDBOOK_VERSION)?;
+    let book_version = Version::parse(&ctx.mdbook_version)
+        .map_err(|e| Error::msg(format!("Invalid mdBook version '{}': {}", ctx.mdbook_version, e)))?;
+    let version_req = VersionReq::parse(mdbook::MDBOOK_VERSION)
+        .map_err(|e| Error::msg(format!("Invalid version requirement: {}", e)))?;
 
     if !version_req.matches(&book_version) {
         warn!(
@@ -81,8 +90,17 @@ fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<(), Error> {
         );
     }
 
-    let processed_book = pre.run(&ctx, book)?;
-    serde_json::to_writer(io::stdout(), &processed_book)?;
+    let processed_book = pre.run(&ctx, book)
+        .map_err(|e| {
+            Error::msg(format!(
+                "Failed to process book with {} preprocessor: {}",
+                pre.name(),
+                e
+            ))
+        })?;
+
+    serde_json::to_writer(io::stdout(), &processed_book)
+        .map_err(|e| Error::msg(format!("Failed to write output JSON: {}", e)))?;
 
     Ok(())
 }
