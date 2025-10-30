@@ -144,17 +144,15 @@ impl Backend {
     /// # Arguments
     /// * `ctx` - The render context for the diagram
     fn filepath(&self, ctx: &RenderContext) -> PathBuf {
-        let filepath = Path::new(&self.source_dir).join(self.relative_file_path(ctx));
-        filepath
+        self.source_dir.join(self.relative_file_path(ctx))
     }
 
-    /// Constructs the relative file path for a diagram
+    /// Constructs the relative file path for a diagram (relative to source dir)
     ///
     /// # Arguments
     /// * `ctx` - The render context for the diagram
     fn relative_file_path(&self, ctx: &RenderContext) -> PathBuf {
-        let filename = filename(ctx);
-        self.output_dir.join(filename)
+        self.output_dir.join(filename(ctx))
     }
 
     /// Renders a D2 diagram and returns the appropriate markdown events

@@ -2,20 +2,19 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-mod default {
-    use std::path::PathBuf;
+/// Default path to the D2 binary
+fn default_bin_path() -> PathBuf {
+    PathBuf::from("d2")
+}
 
-    pub fn bin_path() -> PathBuf {
-        PathBuf::from("d2")
-    }
+/// Default output directory for generated diagrams
+fn default_output_dir() -> PathBuf {
+    PathBuf::from("d2")
+}
 
-    pub fn output_dir() -> PathBuf {
-        PathBuf::from("d2")
-    }
-
-    pub const fn inline() -> bool {
-        false
-    }
+/// Default value for inline mode
+const fn default_inline() -> bool {
+    false
 }
 
 #[derive(Deserialize, PartialEq, Eq, Debug)]
@@ -28,10 +27,10 @@ pub struct Fonts {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     /// The path to the d2 binary
-    #[serde(default = "default::bin_path")]
+    #[serde(default = "default_bin_path")]
     pub path: PathBuf,
 
-    #[serde(default = "default::output_dir")]
+    #[serde(default = "default_output_dir")]
     pub output_dir: PathBuf,
 
     pub layout: Option<String>,
@@ -40,7 +39,7 @@ pub struct Config {
     ///
     /// When `true`, images are embedded directly in the HTML.
     /// When `false` (default), images are saved as separate `.png` files.
-    #[serde(default = "default::inline")]
+    #[serde(default = "default_inline")]
     pub inline: bool,
 
     /// Custom font path
@@ -55,10 +54,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            path: default::bin_path(),
+            path: default_bin_path(),
             layout: None,
-            output_dir: default::output_dir(),
-            inline: default::inline(),
+            output_dir: default_output_dir(),
+            inline: default_inline(),
             fonts: None,
             theme_id: None,
             dark_theme_id: None,

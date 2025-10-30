@@ -1,6 +1,7 @@
 use std::{io, process};
 
 use clap::Parser;
+use log::{error, warn};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor};
 use mdbook_d2_png::D2;
@@ -60,7 +61,7 @@ fn main() {
     if let Some(Command::Supports { renderer }) = args.command {
         handle_supports(&preprocessor, &renderer);
     } else if let Err(e) = handle_preprocessing(&preprocessor) {
-        eprintln!("{e}");
+        error!("Preprocessing failed: {}", e);
         process::exit(1);
     }
 }
@@ -72,9 +73,8 @@ fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<(), Error> {
     let version_req = VersionReq::parse(mdbook::MDBOOK_VERSION)?;
 
     if !version_req.matches(&book_version) {
-        eprintln!(
-            "Warning: The {} plugin was built against version {} of mdbook, but we're being \
-             called from version {}",
+        warn!(
+            "The {} plugin was built against mdbook version {}, but is being called from version {}",
             pre.name(),
             mdbook::MDBOOK_VERSION,
             ctx.mdbook_version
