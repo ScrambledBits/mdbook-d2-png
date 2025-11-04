@@ -1,6 +1,7 @@
 use std::{io, process};
 
 use clap::Parser;
+use log::{error, warn};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor};
 use mdbook_d2_png::D2;
@@ -60,29 +61,46 @@ fn main() {
     if let Some(Command::Supports { renderer }) = args.command {
         handle_supports(&preprocessor, &renderer);
     } else if let Err(e) = handle_preprocessing(&preprocessor) {
-        eprintln!("{e}");
+        error!("Preprocessing failed: {}", e);
         process::exit(1);
     }
 }
 
 fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<(), Error> {
-    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
+    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())
+        .map_err(|e| {
+            Error::msg(format!(
+                "Failed to parse mdBook input: {}. \
+                 This preprocessor should be called by mdBook, not directly.",
+                e
+            ))
+        })?;
 
-    let book_version = Version::parse(&ctx.mdbook_version)?;
-    let version_req = VersionReq::parse(mdbook::MDBOOK_VERSION)?;
+    let book_version = Version::parse(&ctx.mdbook_version)
+        .map_err(|e| Error::msg(format!("Invalid mdBook version '{}': {}", ctx.mdbook_version, e)))?;
+    let version_req = VersionReq::parse(mdbook::MDBOOK_VERSION)
+        .map_err(|e| Error::msg(format!("Invalid version requirement: {}", e)))?;
 
     if !version_req.matches(&book_version) {
-        eprintln!(
-            "Warning: The {} plugin was built against version {} of mdbook, but we're being \
-             called from version {}",
+        warn!(
+            "The {} plugin was built against mdbook version {}, but is being called from version {}",
             pre.name(),
             mdbook::MDBOOK_VERSION,
             ctx.mdbook_version
         );
     }
 
-    let processed_book = pre.run(&ctx, book)?;
-    serde_json::to_writer(io::stdout(), &processed_book)?;
+    let processed_book = pre.run(&ctx, book)
+        .map_err(|e| {
+            Error::msg(format!(
+                "Failed to process book with {} preprocessor: {}",
+                pre.name(),
+                e
+            ))
+        })?;
+
+    serde_json::to_writer(io::stdout(), &processed_book)
+        .map_err(|e| Error::msg(format!("Failed to write output JSON: {}", e)))?;
 
     Ok(())
 }
