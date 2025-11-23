@@ -178,12 +178,11 @@ impl Backend {
             .config
             .get_deserialized_opt(PREPROCESSOR_CONFIG_KEY)
             .unwrap_or_else(|e| {
-                panic!("Unable to deserialize d2-png preprocessor config: {}", e)
+                panic!("Unable to deserialize d2-png preprocessor config: {e}")
             })
             .unwrap_or_else(|| {
                 panic!(
-                    "d2-png preprocessor config not found. Add [{}] section to book.toml",
-                    PREPROCESSOR_CONFIG_KEY
+                    "d2-png preprocessor config not found. Add [{PREPROCESSOR_CONFIG_KEY}] section to book.toml"
                 )
             });
         let source_dir = ctx.root.join(&ctx.config.book.src);
@@ -250,7 +249,7 @@ impl Backend {
         // Ensure output directory exists
         let output_path = self.paths.source_dir.join(self.output_dir());
         fs::create_dir_all(&output_path)
-            .with_context(|| format!("Failed to create output directory: {:?}", output_path))?;
+            .with_context(|| format!("Failed to create output directory: {output_path:?}"))?;
 
         // Build command arguments and execute D2
         let mut args = self.basic_args();
@@ -273,7 +272,7 @@ impl Backend {
 
         let filepath = self.generate_diagram(ctx, content)?;
         let bytes = fs::read(&filepath)
-            .with_context(|| format!("Failed to read generated PNG file: {:?}", filepath))?;
+            .with_context(|| format!("Failed to read generated PNG file: {filepath:?}"))?;
         let data_uri = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
         Ok(create_image_events(data_uri))
     }

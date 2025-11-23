@@ -13,7 +13,7 @@ use mdbook::book::{Book, Chapter};
 use mdbook::errors::Error;
 use mdbook::preprocess::{Preprocessor, PreprocessorContext};
 use mdbook::BookItem;
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_to_cmark::cmark;
 
 mod backend;
@@ -172,7 +172,7 @@ impl<'a> D2BlockProcessor<'a> {
             .render(&render_context, &self.diagram_content)
             .unwrap_or_else(|e| {
                 // If we cannot render the diagram, log the error and return an empty block
-                error!("Failed to render D2 diagram: {}", e);
+                error!("Failed to render D2 diagram: {e}");
                 vec![]
             })
     }

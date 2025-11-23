@@ -17,7 +17,7 @@ const fn default_inline() -> bool {
     false
 }
 
-#[derive(Deserialize, PartialEq, Eq, Debug)]
+#[derive(Deserialize, PartialEq, Eq, Debug, Clone)]
 pub struct Fonts {
     pub regular: PathBuf,
     pub italic: PathBuf,
