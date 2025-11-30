@@ -8,6 +8,7 @@ use anyhow::{anyhow, bail, Context};
 use mdbook::book::SectionNumber;
 use mdbook::preprocess::PreprocessorContext;
 use pulldown_cmark::{CowStr, Event, LinkType, Tag, TagEnd};
+use smallvec::{smallvec, SmallVec};
 use wait_timeout::ChildExt;
 
 use crate::config::{Config, Fonts};
@@ -77,8 +78,8 @@ pub struct RenderContext<'a> {
     /// Name of the chapter (used in error messages to identify which chapter failed)
     chapter: &'a str,
 
-    /// Section number of the chapter (combined with diagram_index to create unique filenames)
-    /// Example: Section "1.2" with diagram_index 3 becomes "1.2.3.png"
+    /// Section number of the chapter (combined with `diagram_index` to create unique filenames)
+    /// Example: Section "1.2" with `diagram_index` 3 becomes "1.2.3.png"
     section: Option<&'a SectionNumber>,
 
     /// Index of this diagram within the chapter (1-based, incremented for each diagram)
@@ -105,31 +106,45 @@ impl<'a> RenderContext<'a> {
 
 /// Generates a unique filename for a diagram based on its context
 ///
-/// Creates filenames in the format: `{section}{diagram_index}.png`
+/// Creates filenames in the format:
+/// - With section: `{section}.{diagram_index}.png` (e.g., `1.2.3.png`)
+/// - Without section: `{path_hash}_{diagram_index}.png` (e.g., `a1b2c3d4_1.png`)
 ///
-/// Examples:
-/// - Section "1.2", diagram 3 → "1.2.3.png"
-/// - No section, diagram 1 → "1.png"
-/// - Section "4", diagram 2 → "4.2.png"
+/// The path hash ensures uniqueness for unnumbered chapters, preventing
+/// filename collisions when multiple chapters lack section numbers.
 ///
 /// # Arguments
-/// * `ctx` - The render context containing section and diagram index
+/// * `ctx` - The render context containing section, path, and diagram index
 fn filename(ctx: &RenderContext) -> String {
-    format!(
-        "{}{}.png",
-        ctx.section.cloned().unwrap_or_default(),
-        ctx.diagram_index
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    ctx.section.as_ref().map_or_else(
+        || {
+            // Generate a stable hash from the chapter path for uniqueness
+            let mut hasher = DefaultHasher::new();
+            ctx.path.hash(&mut hasher);
+            let path_hash: String = format!("{:x}", hasher.finish())
+                .chars()
+                .take(8)
+                .collect();
+            format!("{}_{}.png", path_hash, ctx.diagram_index)
+        },
+        // Note: SectionNumber's Display impl already includes a trailing dot (e.g., "1.2.")
+        // so we just append the diagram_index and extension
+        |section| format!("{}{}.png", section, ctx.diagram_index),
     )
 }
 
 /// Creates markdown events for an image
 ///
-/// Wraps an image in a paragraph with the given URL
+/// Wraps an image in a paragraph with the given URL.
+/// Returns a `SmallVec` since image events are always exactly 4 elements.
 ///
 /// # Arguments
 /// * `url` - The image URL (can be a file path or data URI)
-fn create_image_events(url: String) -> Vec<Event<'static>> {
-    vec![
+fn create_image_events(url: String) -> SmallVec<[Event<'static>; 4]> {
+    smallvec![
         Event::Start(Tag::Paragraph),
         Event::Start(Tag::Image {
             link_type: LinkType::Inline,
@@ -222,9 +237,9 @@ impl Backend {
         content: &str,
     ) -> anyhow::Result<Vec<Event<'static>>> {
         if self.render.inline {
-            self.render_inline_png(ctx, content)
+            self.render_inline_png(ctx, content).map(SmallVec::into_vec)
         } else {
-            self.render_embedded_png(ctx, content)
+            self.render_embedded_png(ctx, content).map(SmallVec::into_vec)
         }
     }
 
@@ -249,14 +264,15 @@ impl Backend {
         // Ensure output directory exists
         let output_path = self.paths.source_dir.join(self.output_dir());
         fs::create_dir_all(&output_path)
-            .with_context(|| format!("Failed to create output directory: {output_path:?}"))?;
+            .with_context(|| format!("Failed to create output directory: {}", output_path.display()))?;
 
         // Build command arguments and execute D2
         let mut args = self.basic_args();
         let filepath = self.filepath(ctx);
         args.push(filepath.as_os_str());
 
-        self.run_process(ctx, content, args)?;
+        // When writing to file, D2 outputs nothing to stdout
+        let _ = self.run_process(ctx, content, args)?;
 
         Ok(filepath)
     }
@@ -265,15 +281,15 @@ impl Backend {
         &self,
         ctx: &RenderContext,
         content: &str,
-    ) -> anyhow::Result<Vec<Event<'static>>> {
+    ) -> anyhow::Result<SmallVec<[Event<'static>; 4]>> {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
-        use std::fs;
 
-        let filepath = self.generate_diagram(ctx, content)?;
-        let bytes = fs::read(&filepath)
-            .with_context(|| format!("Failed to read generated PNG file: {filepath:?}"))?;
-        let data_uri = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
+        // For inline mode, don't specify an output file - D2 will output PNG to stdout
+        let args = self.basic_args();
+        let png_bytes = self.run_process(ctx, content, args)?;
+
+        let data_uri = format!("data:image/png;base64,{}", STANDARD.encode(&png_bytes));
         Ok(create_image_events(data_uri))
     }
 
@@ -281,7 +297,7 @@ impl Backend {
         &self,
         ctx: &RenderContext,
         content: &str,
-    ) -> anyhow::Result<Vec<Event<'static>>> {
+    ) -> anyhow::Result<SmallVec<[Event<'static>; 4]>> {
         self.generate_diagram(ctx, content)?;
 
         let rel_path = self.calculate_relative_path_for_chapter(ctx);
@@ -295,9 +311,7 @@ impl Backend {
 
     /// Calculates the relative path from a chapter to its diagram file
     ///
-    /// This determines how many directories deep the chapter is from the source root,
-    /// then builds a path with the appropriate number of "../" segments to reach
-    /// the diagram file in the output directory.
+    /// Uses pathdiff for robust cross-platform path calculation.
     ///
     /// # Arguments
     /// * `ctx` - The render context for the diagram
@@ -305,19 +319,12 @@ impl Backend {
     /// # Returns
     /// A relative path from the chapter's location to the diagram file
     fn calculate_relative_path_for_chapter(&self, ctx: &RenderContext) -> PathBuf {
-        // Count how many directory levels the chapter is nested from the source root
-        // We need to go up this many levels to reach the source root, then down into the output dir
-        let parent_path = ctx.path.parent().unwrap_or_else(|| Path::new(""));
-        let depth = parent_path.components().count();
+        let chapter_dir = ctx.path.parent().unwrap_or_else(|| Path::new(""));
+        let diagram_path = self.relative_file_path(ctx);
 
-        // Build path with "../" for each level we need to ascend
-        let mut rel_path = PathBuf::new();
-        for _ in 0..depth {
-            rel_path.push("..");
-        }
-
-        // Add the path to the diagram file
-        rel_path.join(self.relative_file_path(ctx))
+        // Use pathdiff for robust relative path calculation
+        // Falls back to the diagram path if diff_paths returns None (e.g., Windows cross-drive)
+        pathdiff::diff_paths(&diagram_path, chapter_dir).unwrap_or(diagram_path)
     }
 
     fn basic_args(&self) -> Vec<&OsStr> {
@@ -349,6 +356,7 @@ impl Backend {
     /// Runs the D2 process to generate a diagram
     ///
     /// Executes the D2 binary with a timeout to prevent hanging on malformed input.
+    /// Returns the stdout bytes from the D2 process (PNG data when no output file is specified).
     ///
     /// # Arguments
     /// * `ctx` - The render context for the diagram
@@ -366,7 +374,7 @@ impl Backend {
         ctx: &RenderContext,
         content: &str,
         args: Vec<&OsStr>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<u8>> {
         let mut child = Command::new(&self.paths.d2_binary)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -375,8 +383,8 @@ impl Backend {
             .spawn()
             .with_context(|| {
                 format!(
-                    "Failed to spawn D2 process. Is D2 installed and available at {:?}?",
-                    self.paths.d2_binary
+                    "Failed to spawn D2 process. Is D2 installed and available at {}?",
+                    self.paths.d2_binary.display()
                 )
             })?;
 
@@ -393,20 +401,18 @@ impl Backend {
         // stdin is automatically closed when it goes out of scope
 
         // Wait for the process with a timeout
-        let status_code = match child.wait_timeout(D2_PROCESS_TIMEOUT)? {
-            Some(status) => status,
-            None => {
-                // Process exceeded timeout, kill it
-                child.kill().context("Failed to kill D2 process after timeout")?;
-                return Err(anyhow!(
-                    "D2 process timed out after {} seconds while processing diagram ({}, #{}). \
-                     The diagram may be too complex or D2 may be hanging. \
-                     Consider simplifying the diagram.",
-                    D2_PROCESS_TIMEOUT.as_secs(),
-                    ctx.chapter,
-                    ctx.diagram_index
-                ));
-            }
+        let Some(status_code) = child.wait_timeout(D2_PROCESS_TIMEOUT)? else {
+            // Process exceeded timeout, kill it and reap to prevent zombie
+            child.kill().context("Failed to kill D2 process after timeout")?;
+            let _ = child.wait(); // Reap the killed process to prevent zombie
+            return Err(anyhow!(
+                "D2 process timed out after {} seconds while processing diagram ({}, #{}). \
+                 The diagram may be too complex or D2 may be hanging. \
+                 Consider simplifying the diagram.",
+                D2_PROCESS_TIMEOUT.as_secs(),
+                ctx.chapter,
+                ctx.diagram_index
+            ));
         };
 
         // Collect output after process completes
@@ -415,7 +421,7 @@ impl Backend {
             .context("Failed to collect D2 process output")?;
 
         if status_code.success() {
-            Ok(())
+            Ok(output.stdout)
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let indented_stderr = format!("\n{stderr}").replace('\n', "\n  ");
@@ -454,7 +460,7 @@ mod tests {
         }
     }
 
-    /// Creates a test RenderContext with given chapter path
+    /// Creates a test `RenderContext` with given chapter path
     fn create_test_context<'a>(
         path: &'a Path,
         chapter: &'a str,
@@ -523,14 +529,17 @@ mod tests {
     #[test]
     fn test_calculate_relative_path_no_section_number() {
         // Chapter without section number (unnumbered chapter)
+        // Now uses path hash for uniqueness instead of "0" prefix
         let backend = create_test_backend();
         let chapter_path = Path::new("appendix/info.md");
         let ctx = create_test_context(chapter_path, "Appendix", None, 1);
 
         let rel_path = backend.calculate_relative_path_for_chapter(&ctx);
+        let rel_str = rel_path.to_string_lossy();
 
-        // One level deep, no section: "../d2/1.png"
-        assert_eq!(rel_path, PathBuf::from("../d2/1.png"));
+        // One level deep, no section: "../d2/<hash>_1.png"
+        assert!(rel_str.starts_with("../d2/"), "Should start with ../d2/, got: {rel_str}");
+        assert!(rel_str.ends_with("_1.png"), "Should end with _1.png, got: {rel_str}");
     }
 
     #[test]
@@ -560,9 +569,33 @@ mod tests {
         let ctx2 = create_test_context(Path::new("test.md"), "Test", Some(&section2), 1);
         assert_eq!(filename(&ctx2), "1.2.3.1.png");
 
-        // No section number
+        // No section number - uses path hash for uniqueness
         let ctx3 = create_test_context(Path::new("test.md"), "Test", None, 5);
-        assert_eq!(filename(&ctx3), "5.png");
+        let filename3 = filename(&ctx3);
+        // Filename should be hash_index.png format (e.g., "a1b2c3d4_5.png")
+        assert!(filename3.ends_with("_5.png"), "Expected hash_5.png format, got: {filename3}");
+        assert!(filename3.len() > 6, "Filename should have hash prefix: {filename3}");
+    }
+
+    #[test]
+    fn test_filename_uniqueness_for_unnumbered_chapters() {
+        // Two different paths should produce different filenames
+        let ctx1 = create_test_context(Path::new("chapter1.md"), "Chapter 1", None, 1);
+        let ctx2 = create_test_context(Path::new("chapter2.md"), "Chapter 2", None, 1);
+
+        let filename1 = filename(&ctx1);
+        let filename2 = filename(&ctx2);
+
+        assert_ne!(filename1, filename2, "Different paths should produce different filenames");
+    }
+
+    #[test]
+    fn test_filename_stability_for_same_path() {
+        // Same path should always produce the same filename
+        let ctx1 = create_test_context(Path::new("test.md"), "Test", None, 1);
+        let ctx2 = create_test_context(Path::new("test.md"), "Test", None, 1);
+
+        assert_eq!(filename(&ctx1), filename(&ctx2), "Same path should produce same filename");
     }
 
     #[test]

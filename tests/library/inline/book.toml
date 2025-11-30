@@ -2,7 +2,7 @@
 [book]
 title = "Test Book"
 
-[preprocessor.d2]
+[preprocessor.d2-png]
 inline = true
 layout = "elk"
 theme-id = "101"

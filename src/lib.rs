@@ -8,13 +8,17 @@
 )]
 #![warn(clippy::pedantic, clippy::nursery)]
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use log::error;
-use mdbook::book::{Book, Chapter};
+use mdbook::book::{Book, Chapter, SectionNumber};
 use mdbook::errors::Error;
 use mdbook::preprocess::{Preprocessor, PreprocessorContext};
 use mdbook::BookItem;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_to_cmark::cmark;
+use rayon::prelude::*;
 
 mod backend;
 use backend::{Backend, RenderContext};
@@ -27,9 +31,32 @@ const PREPROCESSOR_NAME: &str = "d2-png";
 /// The code block language identifier for D2 diagrams
 const D2_CODE_BLOCK_LANG: &str = "d2";
 
+/// Maximum number of concurrent D2 processes
+///
+/// D2 is CPU-intensive, so we cap concurrent processes to prevent resource exhaustion.
+/// This value balances parallelism with system resource constraints.
+const MAX_CONCURRENT_D2_PROCESSES: usize = 8;
+
 /// [D2] diagram generator [`Preprocessor`] for [`MdBook`](https://rust-lang.github.io/mdBook/).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct D2;
+
+/// A render job for a D2 diagram
+///
+/// Contains all information needed to render a diagram in parallel.
+#[derive(Debug, Clone)]
+struct RenderJob {
+    /// Path to the chapter file (for relative path calculation)
+    chapter_path: PathBuf,
+    /// Name of the chapter (for error messages)
+    chapter_name: String,
+    /// Section number (for filename generation)
+    section: Option<SectionNumber>,
+    /// D2 diagram content
+    content: String,
+    /// 1-based index of this diagram within its chapter
+    diagram_index: usize,
+}
 
 impl Preprocessor for D2 {
     fn name(&self) -> &'static str {
@@ -37,20 +64,103 @@ impl Preprocessor for D2 {
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
-        let backend = Backend::from_context(ctx);
+        let backend = Arc::new(Backend::from_context(ctx));
+
+        // Pass 1: Collect all render jobs from all chapters
+        let mut chapter_jobs: Vec<(usize, Vec<RenderJob>)> = Vec::new();
+        let mut chapter_indices: Vec<usize> = Vec::new();
 
         book.for_each_mut(|section| {
             if let BookItem::Chapter(chapter) = section {
-                let events = process_events(
-                    &backend,
+                let jobs = collect_render_jobs(chapter);
+                if !jobs.is_empty() {
+                    chapter_indices.push(chapter_jobs.len());
+                    chapter_jobs.push((chapter_indices.len() - 1, jobs));
+                }
+            }
+        });
+
+        // Flatten all jobs for parallel processing
+        let all_jobs: Vec<(usize, usize, RenderJob)> = chapter_jobs
+            .into_iter()
+            .flat_map(|(chapter_idx, jobs)| {
+                jobs.into_iter()
+                    .enumerate()
+                    .map(move |(job_idx, job)| (chapter_idx, job_idx, job))
+            })
+            .collect();
+
+        // Pass 2: Render all diagrams in parallel with bounded concurrency
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_cpus().min(MAX_CONCURRENT_D2_PROCESSES))
+            .build()
+            .expect("Failed to create thread pool for D2 rendering");
+
+        let rendered_results: Vec<(usize, usize, Result<Vec<Event<'static>>, String>)> =
+            pool.install(|| {
+                all_jobs
+                    .into_par_iter()
+                    .map(|(chapter_idx, job_idx, job)| {
+                        let render_ctx = RenderContext::new(
+                            &job.chapter_path,
+                            &job.chapter_name,
+                            job.section.as_ref(),
+                            job.diagram_index,
+                        );
+
+                        let result = backend
+                            .render(&render_ctx, &job.content)
+                            .map_err(|e| e.to_string());
+
+                        (chapter_idx, job_idx, result)
+                    })
+                    .collect()
+            });
+
+        // Group results by chapter for stitching
+        let mut results_by_chapter: std::collections::HashMap<usize, Vec<(usize, Vec<Event<'static>>)>> =
+            std::collections::HashMap::new();
+
+        for (chapter_idx, job_idx, result) in rendered_results {
+            let events = match result {
+                Ok(events) => events,
+                Err(e) => {
+                    error!("Failed to render D2 diagram: {e}");
+                    Vec::new()
+                }
+            };
+            results_by_chapter
+                .entry(chapter_idx)
+                .or_default()
+                .push((job_idx, events));
+        }
+
+        // Sort results within each chapter by job index
+        for results in results_by_chapter.values_mut() {
+            results.sort_by_key(|(idx, _)| *idx);
+        }
+
+        // Pass 3: Stitch results back into chapters
+        let mut chapter_counter = 0;
+        book.for_each_mut(|section| {
+            if let BookItem::Chapter(chapter) = section {
+                let chapter_results = results_by_chapter.remove(&chapter_counter);
+                chapter_counter += 1;
+
+                let rendered_events: Vec<Vec<Event<'static>>> = chapter_results
+                    .map(|mut results| {
+                        results.sort_by_key(|(idx, _)| *idx);
+                        results.into_iter().map(|(_, events)| events).collect()
+                    })
+                    .unwrap_or_default();
+
+                let events = stitch_events(
                     chapter,
                     Parser::new_ext(&chapter.content, Options::all()),
+                    rendered_events,
                 );
 
-                // create a buffer in which we can place the markdown
                 let mut buf = String::with_capacity(chapter.content.len() + 128);
-
-                // convert it back to markdown and replace the original chapter's content
                 cmark(events, &mut buf)
                     .expect("Failed to convert markdown events back to markdown");
                 chapter.content = buf;
@@ -61,128 +171,106 @@ impl Preprocessor for D2 {
     }
 }
 
-/// Processor for D2 code blocks within markdown events
-///
-/// Manages state while processing a stream of markdown events, detecting D2 code blocks,
-/// accumulating their content, and rendering them to PNG images.
-///
-/// # Design Rationale
-///
-/// This processor is implemented as a struct rather than inline closure logic for several reasons:
-/// - **Testability**: Each method can be unit tested independently
-/// - **Clarity**: State transitions are explicit with named methods
-/// - **Maintainability**: Logic is easier to understand and modify
-/// - **Single Responsibility**: Each method has one clear purpose
-///
-/// While a closure with local variables would be more concise, this approach provides
-/// better long-term maintainability and makes the code more approachable for contributors.
-struct D2BlockProcessor<'a> {
-    backend: &'a Backend,
-    chapter: &'a Chapter,
-    in_block: bool,
-    diagram_content: String,
-    diagram_index: usize,
+/// Returns the number of available CPUs
+fn num_cpus() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
 }
 
-impl<'a> D2BlockProcessor<'a> {
-    /// Creates a new D2 block processor
-    fn new(backend: &'a Backend, chapter: &'a Chapter) -> Self {
-        Self {
-            backend,
-            chapter,
-            in_block: false,
-            diagram_content: String::new(),
-            diagram_index: 0,
+/// Collects all D2 render jobs from a chapter
+///
+/// Scans through markdown events to find D2 code blocks and creates render jobs for each.
+fn collect_render_jobs(chapter: &Chapter) -> Vec<RenderJob> {
+    let source_path = chapter
+        .source_path
+        .as_ref()
+        .expect("Chapter source path should always be set by mdBook");
+
+    let events = Parser::new_ext(&chapter.content, Options::all());
+
+    let mut jobs = Vec::new();
+    let mut in_block = false;
+    let mut diagram_content = String::new();
+    let mut diagram_index = 0usize;
+
+    for event in events {
+        if is_d2_block_start(&event) {
+            in_block = true;
+            diagram_content.clear();
+            diagram_index += 1;
+        } else if in_block {
+            if let Event::Text(content) = &event {
+                diagram_content.push_str(content);
+            } else if matches!(event, Event::End(TagEnd::CodeBlock)) {
+                in_block = false;
+                jobs.push(RenderJob {
+                    chapter_path: source_path.clone(),
+                    chapter_name: chapter.name.clone(),
+                    section: chapter.number.clone(),
+                    content: std::mem::take(&mut diagram_content),
+                    diagram_index,
+                });
+            }
         }
     }
 
-    /// Processes a single markdown event, potentially transforming it
-    ///
-    /// Returns a vector of events to emit (may be empty, one, or multiple events)
-    fn process_event(&mut self, event: Event<'a>) -> Vec<Event<'a>> {
-        if self.is_d2_block_start(&event) {
-            self.start_block();
-            vec![]
-        } else if self.in_block && self.is_text_event(&event) {
-            self.accumulate_content(&event);
-            vec![]
-        } else if self.in_block && self.is_block_end(&event) {
-            self.end_block()
-        } else {
-            vec![event]
-        }
-    }
-
-    /// Checks if an event marks the start of a D2 code block
-    ///
-    /// Matches both `CowStr::Borrowed` and `CowStr::Boxed` variants to ensure
-    /// all D2 blocks are detected regardless of how the parser creates the string.
-    fn is_d2_block_start(&self, event: &Event) -> bool {
-        matches!(
-            event,
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) if lang.as_ref() == D2_CODE_BLOCK_LANG
-        )
-    }
-
-    /// Checks if an event is a text event
-    fn is_text_event(&self, event: &Event) -> bool {
-        matches!(event, Event::Text(_))
-    }
-
-    /// Checks if an event marks the end of a code block
-    fn is_block_end(&self, event: &Event) -> bool {
-        matches!(event, Event::End(TagEnd::CodeBlock))
-    }
-
-    /// Begins processing a new D2 code block
-    fn start_block(&mut self) {
-        self.in_block = true;
-        self.diagram_content.clear();
-        self.diagram_index += 1;
-    }
-
-    /// Accumulates text content from within a D2 code block
-    ///
-    /// Note: Windows CRLF line endings can cause a code block to consist of
-    /// multiple Text events, so we need to buffer them.
-    /// See: https://github.com/raphlinus/pulldown-cmark/issues/507
-    fn accumulate_content(&mut self, event: &Event) {
-        if let Event::Text(content) = event {
-            self.diagram_content.push_str(content);
-        }
-    }
-
-    /// Completes processing of a D2 code block and renders it
-    ///
-    /// Returns the events to replace the code block (either rendered image or empty on error)
-    fn end_block(&mut self) -> Vec<Event<'static>> {
-        self.in_block = false;
-
-        let source_path = self.chapter.source_path.as_ref()
-            .expect("Chapter source path should always be set by mdBook");
-
-        let render_context = RenderContext::new(
-            source_path,
-            &self.chapter.name,
-            self.chapter.number.as_ref(),
-            self.diagram_index,
-        );
-
-        self.backend
-            .render(&render_context, &self.diagram_content)
-            .unwrap_or_else(|e| {
-                // If we cannot render the diagram, log the error and return an empty block
-                error!("Failed to render D2 diagram: {e}");
-                vec![]
-            })
-    }
+    jobs
 }
 
-fn process_events<'a>(
-    backend: &'a Backend,
-    chapter: &'a Chapter,
+/// Checks if an event marks the start of a D2 code block
+fn is_d2_block_start(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) if lang.as_ref() == D2_CODE_BLOCK_LANG
+    )
+}
+
+/// Stitches pre-rendered diagram events back into the markdown event stream
+///
+/// Replaces D2 code blocks with their pre-rendered image events in order.
+fn stitch_events<'a>(
+    _chapter: &'a Chapter,
     events: impl Iterator<Item = Event<'a>> + 'a,
+    mut rendered_events: Vec<Vec<Event<'static>>>,
 ) -> impl Iterator<Item = Event<'a>> + 'a {
-    let mut processor = D2BlockProcessor::new(backend, chapter);
-    events.flat_map(move |event| processor.process_event(event))
+    // Reverse so we can pop from the back (more efficient than removing from front)
+    rendered_events.reverse();
+
+    let mut in_block = false;
+    let mut pending_events: Option<Vec<Event<'static>>> = None;
+
+    // Use a closure to process events with state
+    let mut result_events: Vec<Event<'a>> = Vec::new();
+
+    for event in events {
+        // First, emit any pending events from a previous diagram
+        if let Some(events) = pending_events.take() {
+            result_events.extend(events);
+        }
+
+        if is_d2_block_start(&event) {
+            in_block = true;
+            // Skip the start event
+        } else if in_block {
+            if let Event::Text(_) = &event {
+                // Skip text content (the D2 code)
+            } else if matches!(event, Event::End(TagEnd::CodeBlock)) {
+                in_block = false;
+                // Pop the next rendered result (in reverse order)
+                if let Some(events) = rendered_events.pop() {
+                    pending_events = Some(events);
+                }
+            }
+        } else {
+            result_events.push(event);
+        }
+    }
+
+    // Emit any remaining pending events
+    if let Some(events) = pending_events {
+        result_events.extend(events);
+    }
+
+    result_events.into_iter()
 }
